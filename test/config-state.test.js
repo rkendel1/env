@@ -7,12 +7,15 @@ import test from 'node:test';
 import { defineConfig } from 'appport';
 import {
   AppPortConfigurationState,
+  MaterializationError,
   createExecutionEvidence,
   exportEnv,
   hashConfiguration,
   loadAppPortConfig,
+  materializeApplicationPackage,
   parseEnv,
   projectConfigToEnvironment,
+  resolveMaterializationTarget,
 } from '../src/index.js';
 
 test('loads configuration declaration through the appport config surface', async () => {
@@ -129,4 +132,77 @@ test('CLI adds config namespace while preserving appport v1.0.2 commands', () =>
   assert.match(run('config', 'set', 'database.port', '5432'), /Committed revision 2/);
   assert.equal(run('config', 'get', 'database.port'), '5432');
   assert.match(run('config', 'history'), /REVISION\tHASH\tCREATED\tPARENT/);
+});
+
+test('materialization declaration loads through AppPort config and resolves requested targets', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'appport-materialization-load-'));
+  writeFileSync(join(root, 'appport.config.json'), JSON.stringify({
+    entry: './appport/server.ts',
+    materialization: { targets: ['browser', 'local'] },
+    config: { schema: { service: { timeoutMs: 'number' } }, defaults: { service: { timeoutMs: 1000 } } },
+  }));
+
+  const loaded = await loadAppPortConfig(root);
+  assert.deepEqual(loaded.config.materialization, { targets: ['browser', 'local'] });
+  assert.equal(resolveMaterializationTarget(loaded.config.materialization, { target: 'browser' }), 'browser');
+  assert.throws(
+    () => resolveMaterializationTarget(loaded.config.materialization, { target: 'remote' }),
+    (error) => error instanceof MaterializationError && error.code === 'NO_COMPATIBLE_MATERIALIZATION',
+  );
+});
+
+test('browser/WASM and local/Node materializers use the same package and resolved configuration', async () => {
+  const state = new AppPortConfigurationState({ memory: true });
+  await state.init({
+    schema: { database: { url: 'string' }, private: { token: 'string' } },
+    defaults: { database: { url: 'postgres://local' }, private: { token: 'hidden' } },
+    authorizedPaths: ['database.url'],
+  });
+
+  const application = {
+    entry: './appport/server.ts',
+    manifestPath: './appport/manifest.json',
+    config: { schema: { database: { url: 'string' }, private: { token: 'string' } }, authorizedPaths: ['database.url'] },
+    materialization: { targets: ['browser', 'local'] },
+  };
+  const common = {
+    applicationPackage: 'demo-application@1.0.0',
+    application,
+    configurationState: state,
+    capability: 'barcode.generate',
+  };
+
+  const browser = await materializeApplicationPackage({ ...common, target: 'browser' });
+  const local = await materializeApplicationPackage({ ...common, target: 'local' });
+
+  assert.equal(browser.applicationPackage, common.applicationPackage);
+  assert.equal(local.applicationPackage, common.applicationPackage);
+  assert.equal(browser.runtime, 'wasm');
+  assert.equal(local.runtime, 'node');
+  assert.equal(browser.environment.DATABASE_URL, 'postgres://local');
+  assert.equal(local.environment.DATABASE_URL, 'postgres://local');
+  assert.equal(browser.environment.PRIVATE_TOKEN, undefined);
+  assert.equal(browser.configRevision, local.configRevision);
+  assert.equal(browser.configHash, local.configHash);
+  assert.deepEqual(browser.execution, {
+    capability: 'barcode.generate',
+    configRevision: browser.configRevision,
+    configHash: browser.configHash,
+    configScope: { level: 'execution', target: 'browser' },
+    runtime: 'wasm',
+    result: 'materialized',
+  });
+  await state.close();
+});
+
+test('package-manager installation consumes the application artifact without target-specific source', () => {
+  const consumer = mkdtempSync(join(tmpdir(), 'appport-package-consumer-'));
+  execFileSync('npm', ['install', '--ignore-scripts', process.cwd()], { cwd: consumer, stdio: 'ignore' });
+  const output = execFileSync(process.execPath, ['--input-type=module', '-e', `
+    import { resolveMaterializationTarget, hashConfiguration } from 'appport-config-state-mvp';
+    console.log(resolveMaterializationTarget({ targets: ['browser', 'local'] }, { target: 'local' }));
+    console.log(hashConfiguration({ b: 2, a: 1 }) === hashConfiguration({ a: 1, b: 2 }));
+  `], { cwd: consumer, encoding: 'utf8' }).trim().split(/\r?\n/);
+
+  assert.deepEqual(output, ['local', 'true']);
 });

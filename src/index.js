@@ -15,6 +15,7 @@ export { DEFAULT_CONFIG, defineConfig, loadApplication, loadConfig, runCli };
 
 export const CONFIG_LAYERS = ['defaults', 'environment', 'local', 'override'];
 export const CONFIG_SCOPES = ['application', 'environment', 'execution'];
+export const MATERIALIZATION_TARGETS = ['browser', 'local', 'remote', 'container'];
 const CONFIG_COLLECTION = 'appport_configuration_revisions';
 
 export function canonicalize(value) {
@@ -85,6 +86,7 @@ export async function loadAppPortConfig(cwd = process.cwd(), explicit) {
     config: {
       ...loaded.config,
       config: normalizeDeclaration(userConfig.config),
+      materialization: normalizeMaterialization(userConfig.materialization),
     },
     userConfig,
   };
@@ -215,8 +217,131 @@ export function createExecutionEvidence(input) {
   };
 }
 
+export class MaterializationError extends Error {
+  constructor(code, message) {
+    super(message);
+    this.name = 'MaterializationError';
+    this.code = code;
+  }
+}
+
+export class LocalNodeMaterializer {
+  target = 'local';
+  runtime = 'node';
+  format = 'package';
+
+  async materialize(request) {
+    return materializationRecord({
+      request,
+      runtime: this.runtime,
+      artifact: { package: request.applicationPackage, entry: request.application?.entry },
+      environment: projectConfigToEnvironment(request.resolvedConfig, { baseEnv: request.environment }),
+    });
+  }
+}
+
+export class BrowserWasmMaterializer {
+  target = 'browser';
+  runtime = 'wasm';
+  format = 'package';
+
+  async materialize(request) {
+    return materializationRecord({
+      request,
+      runtime: this.runtime,
+      artifact: { package: request.applicationPackage, manifestPath: request.application?.manifestPath },
+      environment: projectConfigToEnvironment(request.resolvedConfig, { baseEnv: request.environment }),
+    });
+  }
+}
+
+export class RemoteMaterializer {
+  target = 'remote';
+  runtime = 'remote';
+  format = 'package';
+
+  async materialize(request) {
+    return materializationRecord({
+      request,
+      runtime: this.runtime,
+      artifact: { package: request.applicationPackage, endpoint: request.context?.endpoint },
+      environment: projectConfigToEnvironment(request.resolvedConfig, { baseEnv: request.environment }),
+    });
+  }
+}
+
+export function defaultMaterializers() {
+  return [new BrowserWasmMaterializer(), new LocalNodeMaterializer(), new RemoteMaterializer()];
+}
+
+export function resolveMaterializationTarget(declaration = {}, request = {}) {
+  const supportedTargets = normalizeMaterialization(declaration).targets;
+  const requestedTarget = request.target ?? supportedTargets[0];
+  if (!supportedTargets.includes(requestedTarget)) {
+    throw new MaterializationError(
+      'NO_COMPATIBLE_MATERIALIZATION',
+      `Target ${requestedTarget} is not supported by this application package`,
+    );
+  }
+  return requestedTarget;
+}
+
+export async function materializeApplicationPackage(request) {
+  const application = request.application ?? {};
+  const materialization = normalizeMaterialization(request.materialization ?? application.materialization);
+  const target = resolveMaterializationTarget(materialization, request);
+  const materializers = request.materializers ?? defaultMaterializers();
+  const materializer = materializers.find((candidate) => candidate.target === target);
+  if (!materializer) {
+    throw new MaterializationError('NO_COMPATIBLE_MATERIALIZATION', `No materializer is available for target ${target}`);
+  }
+  const resolvedConfig = request.resolvedConfig ?? await request.configurationState.resolve({
+    declaration: application.config,
+    schema: application.config?.schema,
+    authorizedPaths: request.authorizedPaths ?? application.config?.authorizedPaths,
+    override: request.override,
+    scope: { level: 'execution', target },
+  });
+  return materializer.materialize({
+    ...request,
+    application,
+    materialization,
+    target,
+    resolvedConfig,
+  });
+}
+
 function normalizeDeclaration(declaration = {}) {
   return { schema: declaration.schema ?? {}, defaults: declaration.defaults ?? {}, authorizedPaths: declaration.authorizedPaths ?? [] };
+}
+
+function normalizeMaterialization(declaration = {}) {
+  const targets = declaration.targets ?? ['local'];
+  if (!Array.isArray(targets) || targets.length === 0) throw new Error('materialization.targets must be a non-empty array');
+  for (const target of targets) {
+    if (!MATERIALIZATION_TARGETS.includes(target)) throw new Error(`Unknown materialization target: ${target}`);
+  }
+  return { targets: [...new Set(targets)] };
+}
+
+function materializationRecord({ request, runtime, artifact, environment }) {
+  const execution = createExecutionEvidence({
+    capability: request.capability,
+    resolvedConfig: request.resolvedConfig,
+    runtime,
+    result: 'materialized',
+  });
+  return {
+    applicationPackage: request.applicationPackage,
+    target: request.target,
+    runtime,
+    capability: request.capability,
+    artifact,
+    environment,
+    configRevision: request.resolvedConfig.configRevision,
+    configHash: request.resolvedConfig.configHash,
+    execution,
+  };
 }
 
 function normalizeState(state = {}) {
