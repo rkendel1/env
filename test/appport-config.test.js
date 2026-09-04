@@ -96,6 +96,13 @@ test('dotenv compatibility imports structured primitive values and exports legac
   assert.equal(appport.exportEnv(), 'DATABASE_URL=postgres://db\nDEBUG=true\nPORT=3000');
 });
 
+test('configuration paths reject prototype pollution segments', () => {
+  const appport = new AppPort({ configStore: createMemoryConfigStore() });
+
+  assert.throws(() => appport.setConfig('__proto__.polluted', true), /Unsafe configuration path segment/);
+  assert.equal({}.polluted, undefined);
+});
+
 test('CLI supports init, set, get, history, diff, import, and export-env', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'appport-cli-'));
   const cli = path.join(__dirname, '..', 'packages', 'appport-sdk', 'bin', 'appport.js');

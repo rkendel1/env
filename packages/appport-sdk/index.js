@@ -34,7 +34,13 @@ function createFileConfigStore(filePath = path.join(process.cwd(), '.appport', '
 
 function splitPath(configPath) {
   if (!configPath || typeof configPath !== 'string') throw new TypeError('Configuration path must be a non-empty string');
-  return configPath.split('.').filter(Boolean);
+  const parts = configPath.split('.').filter(Boolean);
+  for (const part of parts) {
+    if (part === '__proto__' || part === 'prototype' || part === 'constructor') {
+      throw new TypeError(`Unsafe configuration path segment: ${part}`);
+    }
+  }
+  return parts;
 }
 
 function getPath(object, configPath) {
@@ -45,7 +51,14 @@ function setPath(object, configPath, value) {
   const keys = splitPath(configPath);
   let current = object;
   for (const key of keys.slice(0, -1)) {
-    if (!current[key] || typeof current[key] !== 'object' || Array.isArray(current[key])) current[key] = {};
+    if (
+      !Object.prototype.hasOwnProperty.call(current, key) ||
+      !current[key] ||
+      typeof current[key] !== 'object' ||
+      Array.isArray(current[key])
+    ) {
+      current[key] = {};
+    }
     current = current[key];
   }
   current[keys[keys.length - 1]] = value;
