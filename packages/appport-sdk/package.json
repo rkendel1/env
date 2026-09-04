@@ -1,0 +1,14 @@
+{
+  "name": "@appport/sdk",
+  "version": "0.1.0",
+  "type": "commonjs",
+  "main": "index.js",
+  "exports": "./index.js",
+  "bin": {
+    "appport": "./bin/appport.js"
+  },
+  "dependencies": {
+    "@feltdb/core": "0.1.0"
+  },
+  "license": "MIT"
+}
