@@ -47,6 +47,15 @@ function getPath(object, configPath) {
   return splitPath(configPath).reduce((current, key) => (current == null ? undefined : current[key]), object);
 }
 
+function setOwnValue(object, key, value) {
+  Object.defineProperty(object, key, {
+    value,
+    enumerable: true,
+    configurable: true,
+    writable: true,
+  });
+}
+
 function setPath(object, configPath, value) {
   const keys = splitPath(configPath);
   let current = object;
@@ -57,11 +66,11 @@ function setPath(object, configPath, value) {
       typeof current[key] !== 'object' ||
       Array.isArray(current[key])
     ) {
-      current[key] = {};
+      setOwnValue(current, key, {});
     }
     current = current[key];
   }
-  current[keys[keys.length - 1]] = value;
+  setOwnValue(current, keys[keys.length - 1], value);
 }
 
 function hasPath(object, configPath) {
