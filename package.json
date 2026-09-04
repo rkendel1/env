@@ -1,13 +1,8 @@
 {
-  "name": "env",
+  "name": "appport-config-state-mvp",
   "version": "1.0.0",
-  "private": true,
-  "description": "AppPort configuration capability MVP",
-  "type": "commonjs",
-  "workspaces": [
-    "packages/feltdb-core",
-    "packages/appport-sdk"
-  ],
+  "description": "Configuration State MVP over appport and FeltDB",
+  "type": "module",
   "scripts": {
     "test": "node --test"
   },
@@ -15,5 +10,14 @@
     "type": "git",
     "url": "http://localhost:26831/rkendel1/env"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "dependencies": {
+    "@feltdb/core": "0.8.3",
+    "appport": "1.0.2"
+  },
+  "bin": {
+    "appport": "./bin/appport.js"
+  },
+  "main": "./src/index.js",
+  "exports": "./src/index.js"
 }
